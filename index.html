@@ -146,17 +146,18 @@
       }
     })
 
-    logoutBtn.addEventListener('click', async () => {
-      const { error } = await supabase.auth.signOut()
-      if (error) {
-        alert('Ошибка выхода')
-        console.error(error)
-        return
-      }
-      currentUser = null
-      myInfo.innerText = 'Вы не вошли в аккаунт'
-      fetchGroup()
-    })
+logoutBtn.addEventListener('click', async () => {
+  const { error } = await supabase.auth.signOut()
+
+  if (error) {
+    alert('Ошибка выхода')
+    console.error(error)
+    return
+  }
+
+  // Полный перезапуск страницы
+  window.location.reload()
+})
 
     async function ensureProfile(user) {
       const { data: existing, error: selectError } = await supabase
