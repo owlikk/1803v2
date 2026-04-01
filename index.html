@@ -75,7 +75,7 @@
       margin: 8px 0 14px;
     }
 
-    .user-item {
+    .user-item, .top-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -84,7 +84,7 @@
       border-bottom: 1px solid #eee;
     }
 
-    .user-left {
+    .user-left, .top-left {
       display: flex;
       align-items: center;
       gap: 10px;
@@ -103,7 +103,7 @@
       font-weight: 700;
     }
 
-    .status-wrap {
+    .status-wrap, .top-right {
       text-align: right;
       font-size: 14px;
     }
@@ -193,6 +193,38 @@
       background: #111827;
       color: white;
     }
+
+    .badge-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 10px;
+    }
+
+    .badge {
+      background: #eef2ff;
+      color: #1d4ed8;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .rank-num {
+      font-size: 18px;
+      font-weight: 700;
+      color: #f59e0b;
+      width: 28px;
+      text-align: center;
+    }
+
+    .small-note {
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -212,6 +244,14 @@
       <button class="big-btn warn" id="breakBtn" style="margin-bottom:0;">☕ Перерыв</button>
       <button class="big-btn gray" id="homeBtn" style="margin-bottom:0;">🏠 Выход</button>
     </div>
+
+    <div class="badge-list" id="myAchievements"></div>
+    <div class="small-note" id="myTotalStudy">Общее время учёбы: 0ч 0м 0с</div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">🏆 Топ студентов</div>
+    <div id="topStudents" class="muted">Загрузка...</div>
   </div>
 
   <div class="card">
@@ -246,6 +286,9 @@
     const groupListEl = document.getElementById('grouplist')
     const chatBoxEl = document.getElementById('chatBox')
     const messageInputEl = document.getElementById('messageInput')
+    const topStudentsEl = document.getElementById('topStudents')
+    const myAchievementsEl = document.getElementById('myAchievements')
+    const myTotalStudyEl = document.getElementById('myTotalStudy')
 
     const loginBtn = document.getElementById('loginBtn')
     const logoutBtn = document.getElementById('logoutBtn')
@@ -253,6 +296,10 @@
     const breakBtn = document.getElementById('breakBtn')
     const homeBtn = document.getElementById('homeBtn')
     const sendBtn = document.getElementById('sendBtn')
+
+    const ACH_EARLY = '🌅 Ранняя пташка'
+    const ACH_MARATHON = '🏃 Марафонец'
+    const ACH_ACTIVE = '💬 Активист'
 
     function formatHMS(totalSeconds) {
       const sec = Math.max(0, Number(totalSeconds || 0))
@@ -285,6 +332,35 @@
       )
     }
 
+    function parseAchievements(value) {
+      if (!value) return []
+      return value.split('|').map(v => v.trim()).filter(Boolean)
+    }
+
+    function hasAchievement(profile, badge) {
+      return parseAchievements(profile?.achievements).includes(badge)
+    }
+
+    async function addAchievement(profileId, badge) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('achievements')
+        .eq('id', profileId)
+        .maybeSingle()
+
+      if (error || !data) return
+
+      const list = parseAchievements(data.achievements)
+      if (list.includes(badge)) return
+
+      list.push(badge)
+
+      await supabase
+        .from('profiles')
+        .update({ achievements: list.join('|') })
+        .eq('id', profileId)
+    }
+
     async function ensureProfile(user) {
       const { data: existing, error: selectError } = await supabase
         .from('profiles')
@@ -305,6 +381,9 @@
         user.email?.split('@')[0] ||
         'Пользователь'
 
+      const now = new Date()
+      const earlyBird = now.getHours() < 8 ? ACH_EARLY : ''
+
       const { error: insertError } = await supabase
         .from('profiles')
         .insert({
@@ -314,7 +393,12 @@
           color: 'gray',
           status_started_at: new Date().toISOString(),
           is_paused: false,
-          paused_seconds: 0
+          paused_seconds: 0,
+          study_seconds_total: 0,
+          messages_count: 0,
+          achievements: earlyBird,
+          last_status: '🏠 Дома',
+          last_color: 'gray'
         })
 
       if (insertError) {
@@ -351,11 +435,38 @@
       myProfile = data
     }
 
+    async function finalizeStudySession(profile) {
+      if (!profile) return
+
+      const wasStudy = profile.status === '📘 Учусь'
+      const elapsed = getElapsedSeconds(profile)
+
+      if (!wasStudy || elapsed <= 0) return
+
+      const newTotal = Number(profile.study_seconds_total || 0) + elapsed
+
+      await supabase
+        .from('profiles')
+        .update({
+          study_seconds_total: newTotal
+        })
+        .eq('id', profile.id)
+
+      if (elapsed >= 7200) {
+        await addAchievement(profile.id, ACH_MARATHON)
+      }
+    }
+
     async function setStatus(status, color) {
       if (!currentUser) {
         alert('Сначала войди через Google')
         return
       }
+
+      await loadMyProfile()
+      if (!myProfile) return
+
+      await finalizeStudySession(myProfile)
 
       const nowIso = new Date().toISOString()
 
@@ -366,7 +477,9 @@
           color,
           status_started_at: nowIso,
           is_paused: false,
-          paused_seconds: 0
+          paused_seconds: 0,
+          last_status: status,
+          last_color: color
         })
         .eq('id', currentUser.id)
 
@@ -376,9 +489,7 @@
         return
       }
 
-      await loadMyProfile()
-      await fetchGroup()
-      renderTopTimer()
+      await refreshAll()
     }
 
     async function endSession() {
@@ -386,6 +497,11 @@
         alert('Сначала войди через Google')
         return
       }
+
+      await loadMyProfile()
+      if (!myProfile) return
+
+      await finalizeStudySession(myProfile)
 
       const { error } = await supabase
         .from('profiles')
@@ -404,9 +520,7 @@
         return
       }
 
-      await loadMyProfile()
-      await fetchGroup()
-      renderTopTimer()
+      await refreshAll()
     }
 
     async function toggleBreak() {
@@ -419,9 +533,14 @@
       if (!myProfile) return
 
       if (myProfile.is_paused) {
+        const restoreStatus = myProfile.last_status || '📘 Учусь'
+        const restoreColor = myProfile.last_color || 'green'
+
         const { error } = await supabase
           .from('profiles')
           .update({
+            status: restoreStatus,
+            color: restoreColor,
             is_paused: false,
             status_started_at: new Date().toISOString()
           })
@@ -456,9 +575,7 @@
         breakBtn.textContent = '▶ Продолжить'
       }
 
-      await loadMyProfile()
-      await fetchGroup()
-      renderTopTimer()
+      await refreshAll()
     }
 
     async function sendMessage() {
@@ -478,7 +595,11 @@
 
       const { error } = await supabase
         .from('messages')
-        .insert({ username, text })
+        .insert({
+          user_id: currentUser.id,
+          username,
+          text
+        })
 
       if (error) {
         console.error('Ошибка отправки сообщения:', error)
@@ -487,7 +608,22 @@
       }
 
       messageInputEl.value = ''
-      await fetchMessages()
+
+      await loadMyProfile()
+      if (myProfile) {
+        const newCount = Number(myProfile.messages_count || 0) + 1
+
+        await supabase
+          .from('profiles')
+          .update({ messages_count: newCount })
+          .eq('id', currentUser.id)
+
+        if (newCount >= 20) {
+          await addAchievement(currentUser.id, ACH_ACTIVE)
+        }
+      }
+
+      await refreshAll()
     }
 
     async function fetchMessages() {
@@ -525,21 +661,28 @@
       if (error) {
         console.error('Ошибка загрузки группы:', error)
         groupListEl.innerHTML = '<div class="muted">Ошибка загрузки</div>'
+        topStudentsEl.innerHTML = '<div class="muted">Ошибка загрузки</div>'
         return
       }
 
       if (!data || data.length === 0) {
         groupListEl.innerHTML = '<div class="muted">Нет пользователей</div>'
+        topStudentsEl.innerHTML = '<div class="muted">Нет пользователей</div>'
         return
       }
 
       groupListEl.innerHTML = data.map(user => {
         const elapsed = getElapsedSeconds(user)
+        const badges = parseAchievements(user.achievements)
+
         return `
           <div class="user-item">
             <div class="user-left">
               <div class="status-dot" style="background:${user.color || '#ccc'}"></div>
-              <div class="username">${user.username}</div>
+              <div>
+                <div class="username">${user.username}</div>
+                <div style="font-size:12px;color:#777;">${badges.join(' • ') || 'Без достижений'}</div>
+              </div>
             </div>
             <div class="status-wrap">
               <div class="status-text">${user.status || 'Статус не задан'}</div>
@@ -548,6 +691,26 @@
           </div>
         `
       }).join('')
+
+      const top = [...data]
+        .sort((a, b) => Number(b.study_seconds_total || 0) - Number(a.study_seconds_total || 0))
+        .slice(0, 5)
+
+      topStudentsEl.innerHTML = top.map((user, index) => `
+        <div class="top-item">
+          <div class="top-left">
+            <div class="rank-num">${index + 1}</div>
+            <div>
+              <div class="username">${user.username}</div>
+              <div style="font-size:12px;color:#777;">Сообщений: ${user.messages_count || 0}</div>
+            </div>
+          </div>
+          <div class="top-right">
+            <div style="font-weight:700;color:#2563eb;">${formatHMS(user.study_seconds_total || 0)}</div>
+            <div style="font-size:12px;color:#777;">общее время</div>
+          </div>
+        </div>
+      `).join('')
     }
 
     function renderTopTimer() {
@@ -555,12 +718,21 @@
         fullNameEl.textContent = 'Вы не вошли'
         topTimerEl.textContent = '⏱ 0 сек.'
         breakBtn.textContent = '☕ Перерыв'
+        myAchievementsEl.innerHTML = ''
+        myTotalStudyEl.textContent = 'Общее время учёбы: 0ч 0м 0с'
         return
       }
 
       fullNameEl.textContent = getCurrentName(currentUser)
       topTimerEl.textContent = formatTopSeconds(getElapsedSeconds(myProfile))
       breakBtn.textContent = myProfile.is_paused ? '▶ Продолжить' : '☕ Перерыв'
+
+      const badges = parseAchievements(myProfile.achievements)
+      myAchievementsEl.innerHTML = badges.length
+        ? badges.map(b => `<div class="badge">${b}</div>`).join('')
+        : '<div class="badge">Пока нет достижений</div>'
+
+      myTotalStudyEl.textContent = `Общее время учёбы: ${formatHMS(myProfile.study_seconds_total || 0)}`
     }
 
     async function refreshAll() {
