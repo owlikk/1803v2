@@ -67,6 +67,11 @@
       color: white;
     }
 
+    .blue {
+      background: #2563eb;
+      color: white;
+    }
+
     .row {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -236,6 +241,49 @@
       color: #777;
       margin-top: 2px;
     }
+
+    .name-edit {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .name-edit input {
+      flex: 1;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .name-edit button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: #2563eb;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .delete-btn {
+      border: none;
+      background: #ef4444;
+      color: white;
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    .chat-msg-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
   </style>
 </head>
 <body>
@@ -247,6 +295,12 @@
 
   <div class="card">
     <div class="name" id="fullName">Вы не вошли</div>
+
+    <div class="name-edit">
+      <input id="nameInput" type="text" placeholder="Новое имя" />
+      <button id="saveNameBtn">Сохранить</button>
+    </div>
+
     <div class="timer-top" id="topTimer">⏱ 0 сек.</div>
 
     <button class="big-btn danger" id="endSessionBtn">⛔ Завершить сессию</button>
@@ -318,6 +372,8 @@
     const breakBtn = document.getElementById('breakBtn')
     const homeBtn = document.getElementById('homeBtn')
     const sendBtn = document.getElementById('sendBtn')
+    const nameInputEl = document.getElementById('nameInput')
+    const saveNameBtn = document.getElementById('saveNameBtn')
 
     function formatHMS(totalSeconds) {
       const sec = Math.max(0, Number(totalSeconds || 0))
@@ -622,6 +678,35 @@
       await refreshAll()
     }
 
+    async function updateUsername() {
+      if (!currentUser) {
+        alert('Сначала войди через Google')
+        return
+      }
+
+      const newName = nameInputEl.value.trim()
+
+      if (!newName) {
+        alert('Введите новое имя')
+        return
+      }
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({ username: newName })
+        .eq('id', currentUser.id)
+
+      if (error) {
+        console.error('Ошибка обновления имени:', error)
+        alert('Не удалось обновить имя')
+        return
+      }
+
+      nameInputEl.value = ''
+      await refreshAll()
+      alert('Имя успешно обновлено')
+    }
+
     async function sendMessage() {
       if (!currentUser) {
         alert('Сначала войди через Google')
@@ -631,7 +716,10 @@
       const text = messageInputEl.value.trim()
       if (!text) return
 
+      await loadMyProfile()
+
       const username =
+        myProfile?.username ||
         currentUser.user_metadata?.full_name ||
         currentUser.user_metadata?.name ||
         currentUser.email?.split('@')[0] ||
@@ -653,7 +741,6 @@
 
       messageInputEl.value = ''
 
-      await loadMyProfile()
       if (myProfile) {
         const newCount = Number(myProfile.messages_count || 0) + 1
 
@@ -672,6 +759,27 @@
       }
 
       await refreshAll()
+    }
+
+    async function deleteMessage(messageId) {
+      if (!currentUser) {
+        alert('Сначала войди через Google')
+        return
+      }
+
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', messageId)
+        .eq('user_id', currentUser.id)
+
+      if (error) {
+        console.error('Ошибка удаления сообщения:', error)
+        alert('Не удалось удалить сообщение')
+        return
+      }
+
+      await fetchMessages()
     }
 
     async function fetchMessages() {
@@ -693,7 +801,16 @@
 
       chatBoxEl.innerHTML = data.map(msg => `
         <div class="chat-msg">
-          <span class="chat-name">${msg.username}:</span> ${msg.text}
+          <div class="chat-msg-row">
+            <div>
+              <span class="chat-name">${msg.username}:</span> ${msg.text}
+            </div>
+            ${
+              currentUser && msg.user_id === currentUser.id
+                ? `<button class="delete-btn" onclick="deleteMessage('${msg.id}')">Удалить</button>`
+                : ''
+            }
+          </div>
         </div>
       `).join('')
 
@@ -771,7 +888,7 @@
         return
       }
 
-      fullNameEl.textContent = getCurrentName(currentUser)
+      fullNameEl.textContent = myProfile.username || getCurrentName(currentUser)
       topTimerEl.textContent = formatTopSeconds(getElapsedSeconds(myProfile))
       breakBtn.textContent = myProfile.is_paused ? '▶ Продолжить' : '☕ Перерыв'
 
@@ -824,9 +941,14 @@
     breakBtn.addEventListener('click', toggleBreak)
     homeBtn.addEventListener('click', () => setStatus('🏠 Дома', 'gray'))
     sendBtn.addEventListener('click', sendMessage)
+    saveNameBtn.addEventListener('click', updateUsername)
 
     messageInputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') sendMessage()
+    })
+
+    nameInputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') updateUsername()
     })
 
     supabase.auth.onAuthStateChange(async (_event, session) => {
@@ -855,6 +977,8 @@
 
       await refreshAll()
     }
+
+    window.deleteMessage = deleteMessage
 
     init()
 
